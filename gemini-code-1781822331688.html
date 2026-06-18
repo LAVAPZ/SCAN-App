@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ProduktSkannern Pro</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a73e8">
+    
+    <style>
+        :root {
+            --primary: #1a73e8; /* Google Pixel-blå */
+            --background: #f8f9fa;
+            --surface: #ffffff;
+            --text: #202124;
+            --error: #ea4335;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: var(--background);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 450px;
+            min-height: 100vh;
+            background: var(--surface);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            padding: 16px;
+        }
+
+        h1 {
+            font-size: 22px;
+            text-align: center;
+            margin: 10px 0 20px 0;
+            font-weight: 500;
+        }
+
+        .camera-box {
+            position: relative;
+            width: 100%;
+            border-radius: 24px;
+            overflow: hidden;
+            background: #000;
+            aspect-ratio: 4 / 3;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* En sikte/ram i mitten för att hjälpa användaren att sikta på texten */
+        .scan-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 40%;
+            border: 2px dashed rgba(255, 255, 255, 0.6);
+            border-radius: 12px;
+            pointer-events: none;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
+        }
+
+        .btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 100px; /* Runda Pixel-knappar */
+            padding: 16px 24px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 16px;
+            box-shadow: 0 2px 6px rgba(26, 115, 232, 0.3);
+            transition: transform 0.1s, background-color 0.2s;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+            background-color: #1557b0;
+        }
+
+        .btn-secondary {
+            background-color: #f1f3f4;
+            color: var(--text);
+            box-shadow: none;
+            margin-top: 8px;
+        }
+
+        .status {
+            font-size: 14px;
+            color: #5f6368;
+            text-align: center;
+            margin: 12px 0;
+            min-height: 20px;
+        }
+
+        .list-section {
+            flex-grow: 1;
+            margin-top: 20px;
+        }
+
+        h2 {
+            font-size: 18px;
+            margin-bottom: 12px;
+            color: #5f6368;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        li {
+            background: #f1f3f4;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            border-radius: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .product-text {
+            font-size: 15px;
+            word-break: break-word;
+            padding-right: 10px;
+        }
+
+        .delete-btn {
+            background: none;
+            border: none;
+            color: var(--error);
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 8px;
+        }
+
+        #canvas { display: none; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+<div class="app-container">
+    <h1>ProduktSkannern Pro</h1>
+    
+    <div class="camera-box">
+        <video id="video" autoplay playsinline></video>
+        <div class="scan-overlay"></div>
+    </div>
+    
+    <button id="capture-btn" class="btn">Fota & Skanna text</button>
+    <p id="status" class="status">Startar Pixel-kameran...</p>
+    
+    <canvas id="canvas"></canvas>
+
+    <div class="list-section">
+        <h2>Skannade produkter (<span id="count">0</span>)</h2>
+        <ul id="product-list"></ul>
+        <button id="clear-btn" class="btn btn-secondary">Töm listan</button>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const captureBtn = document.getElementById('capture-btn');
+    const canvas = document.getElementById('canvas');
+    const statusText = document.getElementById('status');
+    const productList = document.getElementById('product-list');
+    const clearBtn = document.getElementById('clear-btn');
+    const countSpan = document.getElementById('count');
+
+    let dbProducts = JSON.parse(localStorage.getItem('pixel_products')) || [];
+
+    // Pixel 9 Pro-optimerade kamerainställningar (Hög upplösning på bakkameran)
+    const constraints = {
+        video: {
+            facingMode: { exact: 'environment' },
+            width: { ideal: 4096 }, // Ber om hög upplösning för skarp text
+            height: { ideal: 3072 }
+        }
+    };
+
+    // Starta kameran
+    navigator.mediaDevices.getUserMedia(constraints)
+        .then(stream => {
+            video.srcObject = stream;
+            statusText.innerText = "Placera texten i ramen och tryck på knappen.";
+        })
+        .catch(err => {
+            console.log("Kunde inte låsa till bakkamera exakt, provar allmän bakkamera...");
+            // Fallback om 'exact' blockeras på vissa testverktyg
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+                .then(s => { video.srcObject = s; statusText.innerText = "Kamera redo."; })
+                .catch(e => { statusText.innerText = "Kameratillgång nekad."; });
+        });
+
+    renderProducts();
+
+    // Fotografering och textigenkänning
+    captureBtn.addEventListener('click', () => {
+        statusText.innerText = "Analyserar med Pixel-skärpa...";
+        captureBtn.disabled = true;
+        captureBtn.style.opacity = "0.6";
+
+        const context = canvas.getContext('2d');
+        // Vi sätter canvas till videons faktiska (höga) upplösning för maximal OCR-precision
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        Tesseract.recognize(
+            canvas.toDataURL('image/jpeg', 0.9), // Hög kvalitet på bilden till OCR
+            'swe+eng',
+            { logger: m => console.log(m.status) }
+        ).then(({ data: { text } }) => {
+            captureBtn.disabled = false;
+            captureBtn.style.opacity = "1";
+            
+            const cleanedText = text.trim();
+            
+            if (cleanedText.length > 2) {
+                addProduct(cleanedText);
+                statusText.innerText = "Tillagd i listan!";
+                // Enkel vibrationseffekt (haptisk feedback) som känns bra på Pixel 9
+                if (navigator.vibrate) navigator.vibrate(50); 
+            } else {
+                statusText.innerText = "Hittade ingen text. Håll mobilen stilla och tryck igen.";
+            }
+        }).catch(err => {
+            console.error(err);
+            captureBtn.disabled = false;
+            captureBtn.style.opacity = "1";
+            statusText.innerText = "Ett fel uppstod. Försök igen.";
+        });
+    });
+
+    function addProduct(text) {
+        const singleLineText = text.replace(/\n/g, ' ');
+        dbProducts.unshift(singleLineText); // Lägg överst i listan
+        localStorage.setItem('pixel_products', JSON.stringify(dbProducts));
+        renderProducts();
+    }
+
+    function renderProducts() {
+        productList.innerHTML = '';
+        countSpan.innerText = dbProducts.length;
+        dbProducts.forEach((product, index) => {
+            const li = document.createElement('li');
+            li.innerHTML = `
+                <span class="product-text">${product}</span>
+                <button class="delete-btn" onclick="deleteProduct(${index})">Radera</button>
+            `;
+            productList.appendChild(li);
+        });
+    }
+
+    window.deleteProduct = function(index) {
+        dbProducts.splice(index, 1);
+        localStorage.setItem('pixel_products', JSON.stringify(dbProducts));
+        renderProducts();
+        if (navigator.vibrate) navigator.vibrate(30);
+    };
+
+    clearBtn.addEventListener('click', () => {
+        if(confirm("Vill du rensa hela listan?")) {
+            dbProducts = [];
+            localStorage.removeItem('pixel_products');
+            renderProducts();
+            statusText.innerText = "Listan är tom.";
+        }
+    });
+
+    // Registrera Service Worker (krävs för full PWA-installation)
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').catch(() => {
+                // Ignorera om vi kör lokalt utan sw.js, appen fungerar ändå!
+            });
+        });
+    }
+</script>
+
+</body>
+</html>
